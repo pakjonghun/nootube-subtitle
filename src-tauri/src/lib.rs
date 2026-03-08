@@ -2,6 +2,9 @@ use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
 use tokio::process::Command;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 fn get_sidecar_path() -> Result<PathBuf, String> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     let dir = exe.parent().ok_or("Cannot find executable path")?;
@@ -95,8 +98,8 @@ async fn extract_subtitle(
     };
     emit_log(&app, &searching_msg);
 
-    let output = Command::new(&yt_dlp_str)
-        .args([
+    let mut cmd = Command::new(&yt_dlp_str);
+    cmd.args([
             "--skip-download",
             "--write-sub",
             "--write-auto-sub",
@@ -105,8 +108,12 @@ async fn extract_subtitle(
             "--output", "subtitle.%(ext)s",
         ])
         .arg(&url)
-        .current_dir(&temp_dir)
-        .output()
+        .current_dir(&temp_dir);
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let output = cmd.output()
         .await
         .map_err(|e| e.to_string())?;
 
