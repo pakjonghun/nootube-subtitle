@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build
+dist/
+src-tauri/target/
+
+# yt-dlp sidecar binaries (downloaded per-platform in CI)
+src-tauri/binaries/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
