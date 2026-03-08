@@ -9,7 +9,23 @@ permissions:
   contents: write
 
 jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_id: ${{ steps.create-release.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Create Release
+        id: create-release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: NooTube Subtitle Extractor ${{ github.ref_name }}
+          draft: false
+          prerelease: false
+
   build-tauri:
+    needs: create-release
     permissions:
       contents: write
     strategy:
@@ -69,9 +85,5 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: NooTube Subtitle Extractor ${{ github.ref_name }}
-          releaseBody: ''
-          releaseDraft: false
-          prerelease: false
+          releaseId: ${{ needs.create-release.outputs.release_id }}
           args: ${{ matrix.args }}
