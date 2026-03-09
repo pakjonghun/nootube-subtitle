@@ -2,7 +2,7 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { writeText } from '@tauri-apps/plugin-clipboard-manager';
-import { t } from './i18n';
+import { t, LANGUAGES } from './i18n';
 import { useSettings } from './useSettings';
 import Settings from './Settings';
 
@@ -20,6 +20,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
   const logsEndRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef(false);
   const { settings, updateSettings } = useSettings();
   const { locale } = settings;
 
@@ -50,6 +51,7 @@ function App() {
     const trimmed = url.trim();
     if (!trimmed) return;
 
+    abortRef.current = false;
     setStatus({ type: 'loading' });
     setSubtitle('');
     setLogs([]);
@@ -61,6 +63,12 @@ function App() {
         langPriority: settings.subtitleLangPriority,
         locale,
       });
+
+      if (abortRef.current) {
+        setStatus({ type: 'error', message: t(locale, 'stopped') });
+        return;
+      }
+
       setSubtitle(result);
 
       if (settings.autoCopy) {
@@ -72,10 +80,19 @@ function App() {
         setStatus({ type: 'success', message: t(locale, 'successWithoutCopy') });
       }
     } catch (err) {
+      if (abortRef.current) {
+        setStatus({ type: 'error', message: t(locale, 'stopped') });
+        return;
+      }
       const message = typeof err === 'string' ? err : (err as Error).message || 'Unknown error';
       setStatus({ type: 'error', message });
     }
   }, [url, settings, locale]);
+
+  const handleStop = useCallback(() => {
+    abortRef.current = true;
+    setStatus({ type: 'error', message: t(locale, 'stopped') });
+  }, [locale]);
 
   const handleCopy = useCallback(async () => {
     if (!subtitle) return;
@@ -115,12 +132,36 @@ function App() {
           disabled={status.type === 'loading'}
         />
         <button
-          className="btn-extract"
-          onClick={handleExtract}
-          disabled={status.type === 'loading' || !url.trim()}
+          className={`btn-extract ${status.type === 'loading' ? 'loading' : ''}`}
+          onClick={status.type === 'loading' ? handleStop : handleExtract}
+          disabled={status.type !== 'loading' && !url.trim()}
         >
-          {status.type === 'loading' ? t(locale, 'extracting') : t(locale, 'extract')}
+          {status.type === 'loading' ? (<>&#9724; {t(locale, 'stopExtract')}</>) : (<>&#9654; {t(locale, 'extract')}</>)}
         </button>
+      </div>
+
+      <div className="lang-priority-bar">
+        <span className="lang-priority-label">{t(locale, 'priorityLabel')}</span>
+        <div className="lang-priority-tags">
+          {settings.subtitleLangPriority.map((code, i) => {
+            const lang = LANGUAGES.find((l) => l.code === code);
+            return (
+              <span
+                key={code}
+                className={`lang-priority-tag ${i === 0 ? 'active' : ''}`}
+                onClick={() => {
+                  if (i === 0) return;
+                  const newPriority = [code, ...settings.subtitleLangPriority.filter((c) => c !== code)];
+                  updateSettings({ subtitleLangPriority: newPriority });
+                }}
+                style={{ cursor: i === 0 ? 'default' : 'pointer' }}
+              >
+                <span className="lang-priority-rank">{i + 1}</span>
+                {lang ? t(locale, lang.labelKey) : code}
+              </span>
+            );
+          })}
+        </div>
       </div>
 
       <div className="subtitle-area">

@@ -114,9 +114,67 @@ body {
   background-color: var(--accent-hover);
 }
 
+.btn-extract.loading {
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  color: white;
+}
+
+.btn-extract.loading:hover {
+  border-color: var(--error);
+  color: white;
+}
+
 .btn-extract:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* Language priority bar */
+.lang-priority-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.lang-priority-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.lang-priority-tags {
+  display: flex;
+  gap: 6px;
+}
+
+.lang-priority-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.lang-priority-tag:hover:not(:first-child) {
+  border-color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.lang-priority-tag.active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.lang-priority-rank {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--accent);
 }
 
 .subtitle-area {

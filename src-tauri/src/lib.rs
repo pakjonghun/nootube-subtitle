@@ -77,11 +77,10 @@ async fn extract_subtitle(
         lang_priority
     };
 
-    let lang_csv = langs.join(",");
     let lang_display: Vec<String> = langs.iter().map(|l| lang_name(l, loc)).collect();
 
     let temp_dir = std::env::temp_dir().join("yt-subtitle-extractor");
-    let _ = std::fs::create_dir_all(&temp_dir);
+    std::fs::create_dir_all(&temp_dir).map_err(|e| e.to_string())?;
 
     // 기존 파일 정리
     if let Ok(entries) = std::fs::read_dir(&temp_dir) {
@@ -90,103 +89,112 @@ async fn extract_subtitle(
         }
     }
 
-    // 한 번에 모든 언어 자막 요청
+    // 우선순위 순서대로 언어별 개별 시도
+    // 쿠키 파일 탐색 (~/.yt-cookies.txt)
+    let cookie_file = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()
+        .map(|h| PathBuf::from(h).join(".yt-cookies.txt"))
+        .filter(|p| p.exists());
+
+    if let Some(ref cf) = cookie_file {
+        let cookie_msg = if loc == "ko" {
+            format!("쿠키 사용: {}", cf.display())
+        } else {
+            format!("Using cookies: {}", cf.display())
+        };
+        emit_log(&app, &cookie_msg);
+    }
+
     let searching_msg = if loc == "ko" {
-        format!("{} 자막 한번에 검색 중...", lang_display.join(", "))
+        format!("{} 자막 검색 중...", lang_display.join(", "))
     } else {
         format!("Searching {} subtitles...", lang_display.join(", "))
     };
     emit_log(&app, &searching_msg);
 
-    let mut cmd = Command::new(&yt_dlp_str);
-    cmd.args([
-            "--skip-download",
-            "--write-sub",
-            "--write-auto-sub",
-            "--sub-format", "vtt/srt/best",
-            "--sub-lang", &lang_csv,
-            "--output", "subtitle.%(ext)s",
-        ])
-        .arg(&url)
-        .current_dir(&temp_dir);
-
-    #[cfg(target_os = "windows")]
-    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-
-    let output = cmd.output()
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    // 다운로드된 자막 파일 수집
-    let mut found_files: Vec<(String, PathBuf)> = Vec::new();
-
-    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-
-            if let Some(ext) = path.extension() {
-                let ext = ext.to_string_lossy().to_lowercase();
-                if ext == "vtt" || ext == "srt" {
-                    let parts: Vec<&str> = filename.split('.').collect();
-                    if parts.len() >= 3 {
-                        let lang_code = parts[1].to_string();
-                        found_files.push((lang_code, path));
-                    }
-                }
-            }
-        }
-    }
-
-    if found_files.is_empty() {
-        if stderr.contains("no subtitles") || stderr.contains("not available") {
-            return Err(msg(loc, "no_subtitle"));
-        }
-        return Err(msg(loc, "download_failed"));
-    }
-
-    // 우선순위에 따라 선택
-    let mut best_file: Option<&PathBuf> = None;
     let mut best_lang = String::new();
+    let mut best_path: Option<PathBuf> = None;
 
-    for lang in &langs {
-        if let Some(entry) = found_files.iter().find(|(l, _)| l == lang) {
-            best_file = Some(&entry.1);
-            best_lang = lang.clone();
-            break;
-        }
-    }
-
-    if best_file.is_none() {
-        if let Some(entry) = found_files.first() {
-            best_file = Some(&entry.1);
-            best_lang = entry.0.clone();
-        }
-    }
-
-    if let Some(path) = best_file {
-        let found_msg = if loc == "ko" {
-            format!("{} 자막 발견! 처리 중...", lang_name(&best_lang, loc))
-        } else {
-            format!("{} subtitle found! Processing...", lang_name(&best_lang, loc))
-        };
-        emit_log(&app, &found_msg);
-
-        let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-
-        // 정리
+    for (i, lang) in langs.iter().enumerate() {
+        // 기존 파일 정리
         if let Ok(entries) = std::fs::read_dir(&temp_dir) {
             for entry in entries.flatten() {
                 let _ = std::fs::remove_file(entry.path());
             }
         }
 
-        return Ok(clean_subtitle(&content));
+        let try_msg = if loc == "ko" {
+            format!("{} 자막 시도 중... ({}/{})", lang_name(lang, loc), i + 1, langs.len())
+        } else {
+            format!("Trying {} subtitle... ({}/{})", lang_name(lang, loc), i + 1, langs.len())
+        };
+        emit_log(&app, &try_msg);
+
+        let mut cmd = Command::new(&yt_dlp_str);
+        cmd.args([
+                "--skip-download",
+                "--write-auto-sub",
+                "--sub-format", "vtt",
+                "--sub-lang", lang.as_str(),
+                "--output", "subtitle",
+            ]);
+
+        if let Some(ref cf) = cookie_file {
+            cmd.args(["--cookies", &cf.to_string_lossy()]);
+        }
+
+        cmd.arg(&url)
+            .current_dir(&temp_dir);
+
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+        let result = cmd.output().await.map_err(|e| e.to_string())?;
+        let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+        eprintln!("[yt-dlp {}] {}", lang, stderr);
+
+        // 다운로드된 vtt 파일 찾기
+        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if let Some(ext) = path.extension() {
+                    if ext.to_string_lossy().to_lowercase() == "vtt" {
+                        best_lang = lang.clone();
+                        best_path = Some(path);
+                        break;
+                    }
+                }
+            }
+        }
+
+        if best_path.is_some() {
+            break;
+        }
     }
 
-    Err(msg(loc, "no_subtitle"))
+    match best_path {
+        Some(path) => {
+            let found_msg = if loc == "ko" {
+                format!("{} 자막 발견! 처리 중...", lang_name(&best_lang, loc))
+            } else {
+                format!("{} subtitle found! Processing...", lang_name(&best_lang, loc))
+            };
+            emit_log(&app, &found_msg);
+
+            let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+
+            // 정리
+            if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+                for entry in entries.flatten() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+
+            Ok(clean_subtitle(&content))
+        }
+        None => Err(msg(loc, "no_subtitle")),
+    }
 }
 
 fn is_youtube_url(url: &str) -> bool {
