@@ -6,6 +6,14 @@ import { t, LANGUAGES } from './i18n';
 import { useSettings } from './useSettings';
 import Settings from './Settings';
 
+const isYouTubeUrl = (u: string) => {
+  try {
+    const parsed = new URL(u);
+    return ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'youtu.be', 'www.youtu.be']
+      .includes(parsed.hostname);
+  } catch { return false; }
+};
+
 type Status =
   | { type: 'idle' }
   | { type: 'loading' }
@@ -50,6 +58,11 @@ function App() {
   const handleExtract = useCallback(async () => {
     const trimmed = url.trim();
     if (!trimmed) return;
+
+    if (!isYouTubeUrl(trimmed)) {
+      setStatus({ type: 'error', message: locale === 'ko' ? '올바른 YouTube URL이 아닙니다.' : 'Not a valid YouTube URL.' });
+      return;
+    }
 
     abortRef.current = false;
     setStatus({ type: 'loading' });
@@ -211,5 +224,3 @@ function App() {
 }
 
 export default App;
-
-//
