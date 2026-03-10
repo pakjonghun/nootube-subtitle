@@ -105,7 +105,11 @@ async fn extract_subtitle(
         emit_log(&app, &cookie_msg);
     }
 
-    // Step 1: --list-subs로 사용 가능한 자막 목록 조회 (yt-dlp 1회 호출)
+    let normalize = |code: &str| -> String {
+        code.split('-').next().unwrap_or(code).to_string()
+    };
+
+    // Step 1: --list-subs로 실제 언어코드 확인 (yt-dlp 1회차)
     let searching_msg = if loc == "ko" {
         format!("{} 자막 검색 중...", lang_display.join(", "))
     } else {
@@ -125,141 +129,124 @@ async fn extract_subtitle(
 
     let list_output = list_cmd.output().await.map_err(|e| e.to_string())?;
     let list_text = String::from_utf8_lossy(&list_output.stdout).to_string();
-    let list_stderr = String::from_utf8_lossy(&list_output.stderr).to_string();
-    eprintln!("[yt-dlp list-subs] {}", list_stderr);
 
-    // --list-subs 출력 파싱: 사용 가능한 언어코드 수집
-    let mut available_manual: Vec<String> = Vec::new();
+    // 사용 가능한 자막 코드 수집
     let mut available_auto: Vec<String> = Vec::new();
-    let mut section: Option<&str> = None;
+    let mut section_is_auto = false;
 
     for line in list_text.lines() {
         if line.contains("Available subtitles") {
-            section = Some("manual");
+            section_is_auto = false;
             continue;
         }
         if line.contains("Available automatic captions") {
-            section = Some("auto");
+            section_is_auto = true;
             continue;
         }
-        if section.is_none() { continue; }
+        if !section_is_auto { continue; }
 
-        // 언어코드 행: "ko       Korean       vtt, srt, ..."
         let trimmed = line.trim();
         if let Some(lang_code) = trimmed.split_whitespace().next() {
             if lang_code == "Language" || lang_code.is_empty() { continue; }
-            // lang_code가 유효한 코드인지 확인 (알파벳 최소 1자 포함, 알파벳/숫자/하이픈만)
             if lang_code.chars().any(|c| c.is_ascii_alphabetic())
                 && lang_code.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-                match section {
-                    Some("manual") => available_manual.push(lang_code.to_string()),
-                    Some("auto") => available_auto.push(lang_code.to_string()),
-                    _ => {}
-                }
+                available_auto.push(lang_code.to_string());
             }
         }
     }
 
-    eprintln!("[subtitle] manual: {:?}, auto count: {}", available_manual, available_auto.len());
-
-    if available_manual.is_empty() && available_auto.is_empty() {
+    if available_auto.is_empty() {
         return Err(msg(loc, "no_subtitle"));
     }
 
-    // Step 2: 우선순위에 따라 후보 목록 생성
-    // 정규화된 코드 비교 ("en-orig" → "en", "zh-Hans" → "zh")
-    let normalize = |code: &str| -> String {
-        code.split('-').next().unwrap_or(code).to_string()
-    };
-
-    // (언어코드, is_auto) 후보 리스트를 우선순위 순으로 생성
-    let mut candidates: Vec<(String, bool)> = Vec::new();
+    // 우선순위에 맞는 실제 코드 매핑 (zh → zh-Hans 등)
+    let mut download_codes: Vec<String> = Vec::new();
     for lang in &langs {
-        // 수동 자막 우선
-        if let Some(found) = available_manual.iter().find(|c| normalize(c) == *lang) {
-            candidates.push((found.clone(), false));
-        }
-        // 자동 자막
         if let Some(found) = available_auto.iter().find(|c| normalize(c) == *lang) {
-            candidates.push((found.clone(), true));
+            if !download_codes.contains(found) {
+                download_codes.push(found.clone());
+            }
         }
     }
 
-    // 우선순위에 없으면 첫 번째 사용 가능한 것
-    if candidates.is_empty() {
-        if let Some(first) = available_manual.first() {
-            candidates.push((first.clone(), false));
-        } else if let Some(first) = available_auto.first() {
-            candidates.push((first.clone(), true));
-        }
-    }
-
-    if candidates.is_empty() {
+    if download_codes.is_empty() {
         return Err(msg(loc, "no_subtitle"));
     }
 
-    // Step 3: 후보 순서대로 다운로드 시도, 성공하면 즉시 반환
-    for (selected_lang, is_auto) in &candidates {
-        let display_lang = normalize(selected_lang);
-        let dl_msg = if loc == "ko" {
-            format!("{} 자막 다운로드 중...", lang_name(&display_lang, loc))
-        } else {
-            format!("Downloading {} subtitle...", lang_name(&display_lang, loc))
-        };
-        emit_log(&app, &dl_msg);
+    // Step 2: 실제 코드로 한 번에 다운로드 (yt-dlp 2회차)
+    let dl_csv = download_codes.join(",");
+    let dl_msg = if loc == "ko" {
+        "자막 다운로드 중...".to_string()
+    } else {
+        "Downloading subtitles...".to_string()
+    };
+    emit_log(&app, &dl_msg);
 
-        // 기존 파일 정리
-        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-            for entry in entries.flatten() {
-                let _ = std::fs::remove_file(entry.path());
-            }
-        }
+    let mut dl_cmd = Command::new(&yt_dlp_str);
+    dl_cmd.args([
+        "--skip-download",
+        "--write-auto-sub",
+        "--sub-format", "vtt",
+        "--sub-lang", &dl_csv,
+        "--output", "subtitle",
+    ]);
+    if let Some(ref cf) = cookie_file {
+        dl_cmd.args(["--cookies", &cf.to_string_lossy()]);
+    }
+    dl_cmd.args(["--", &url]).current_dir(&temp_dir);
 
-        let sub_flag = if *is_auto { "--write-auto-sub" } else { "--write-sub" };
+    #[cfg(target_os = "windows")]
+    dl_cmd.creation_flags(0x08000000);
 
-        let mut dl_cmd = Command::new(&yt_dlp_str);
-        dl_cmd.args([
-            "--skip-download",
-            sub_flag,
-            "--sub-format", "vtt",
-            "--sub-lang", selected_lang.as_str(),
-            "--output", "subtitle",
-        ]);
-        if let Some(ref cf) = cookie_file {
-            dl_cmd.args(["--cookies", &cf.to_string_lossy()]);
-        }
-        dl_cmd.args(["--", &url]).current_dir(&temp_dir);
+    let dl_result = dl_cmd.output().await.map_err(|e| e.to_string())?;
+    let dl_stderr = String::from_utf8_lossy(&dl_result.stderr).to_string();
+    eprintln!("[yt-dlp download] {}", dl_stderr);
 
-        #[cfg(target_os = "windows")]
-        dl_cmd.creation_flags(0x08000000);
-
-        let dl_result = dl_cmd.output().await.map_err(|e| e.to_string())?;
-        let dl_stderr = String::from_utf8_lossy(&dl_result.stderr).to_string();
-        eprintln!("[yt-dlp download {}] {}", selected_lang, dl_stderr);
-
-        // 다운로드된 vtt 파일 찾기
-        let mut subtitle_path: Option<PathBuf> = None;
-        if let Ok(entries) = std::fs::read_dir(&temp_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if let Some(ext) = path.extension() {
-                    if ext.to_string_lossy().to_lowercase() == "vtt" {
-                        subtitle_path = Some(path);
-                        break;
+    // 다운로드된 vtt 파일에서 우선순위 높은 것 선택
+    let mut found_files: Vec<(String, PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            if let Some(ext) = path.extension() {
+                if ext.to_string_lossy().to_lowercase() == "vtt" {
+                    let parts: Vec<&str> = filename.split('.').collect();
+                    if parts.len() >= 3 {
+                        let raw_lang = parts[parts.len() - 2].to_string();
+                        let lang_code = normalize(&raw_lang);
+                        found_files.push((lang_code, path));
                     }
                 }
             }
         }
+    }
 
-        if let Some(path) = subtitle_path {
+    if found_files.is_empty() {
+        return Err(msg(loc, "download_failed"));
+    }
+
+    // 우선순위 순 선택
+    let mut best: Option<&(String, PathBuf)> = None;
+    for lang in &langs {
+        if let Some(entry) = found_files.iter().find(|(l, _)| l == lang) {
+            best = Some(entry);
+            break;
+        }
+    }
+    if best.is_none() {
+        best = found_files.first();
+    }
+
+    match best {
+        Some((lang_code, path)) => {
             let done_msg = if loc == "ko" {
-                format!("{} 자막 발견! 처리 중...", lang_name(&display_lang, loc))
+                format!("{} 자막 발견! 처리 중...", lang_name(lang_code, loc))
             } else {
-                format!("{} subtitle found! Processing...", lang_name(&display_lang, loc))
+                format!("{} subtitle found! Processing...", lang_name(lang_code, loc))
             };
             emit_log(&app, &done_msg);
 
-            let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
 
             // 정리
             if let Ok(entries) = std::fs::read_dir(&temp_dir) {
@@ -268,19 +255,10 @@ async fn extract_subtitle(
                 }
             }
 
-            return Ok(clean_subtitle(&content));
+            Ok(clean_subtitle(&content))
         }
-
-        // 실패 시 다음 후보로
-        let fail_msg = if loc == "ko" {
-            format!("{} 자막 실패, 다음 시도...", lang_name(&display_lang, loc))
-        } else {
-            format!("{} failed, trying next...", lang_name(&display_lang, loc))
-        };
-        emit_log(&app, &fail_msg);
+        None => Err(msg(loc, "download_failed")),
     }
-
-    Err(msg(loc, "download_failed"))
 }
 
 fn is_youtube_url(url: &str) -> bool {
