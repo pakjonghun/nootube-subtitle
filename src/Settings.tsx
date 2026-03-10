@@ -81,18 +81,18 @@ export default function Settings({ settings, onUpdate, onClose }: Props) {
         <div className="settings-section">
           <label>{t(locale, "appLanguage")}</label>
           <div className="locale-selector">
-            <button
-              className={locale === "ko" ? "active" : ""}
-              onClick={() => onUpdate({ locale: "ko" as Locale })}
-            >
-              {t(locale, "korean")}
-            </button>
-            <button
-              className={locale === "en" ? "active" : ""}
-              onClick={() => onUpdate({ locale: "en" as Locale })}
-            >
-              {t(locale, "english")}
-            </button>
+            {(["ko", "en", "ja", "zh"] as const).map((loc) => {
+              const labelKey = { ko: "korean", en: "english", ja: "japanese", zh: "chinese" } as const;
+              return (
+                <button
+                  key={loc}
+                  className={locale === loc ? "active" : ""}
+                  onClick={() => onUpdate({ locale: loc as Locale })}
+                >
+                  {t(locale, labelKey[loc])}
+                </button>
+              );
+            })}
           </div>
         </div>
       </div>

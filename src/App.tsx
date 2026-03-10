@@ -60,7 +60,7 @@ function App() {
     if (!trimmed) return;
 
     if (!isYouTubeUrl(trimmed)) {
-      setStatus({ type: 'error', message: locale === 'ko' ? '올바른 YouTube URL이 아닙니다.' : 'Not a valid YouTube URL.' });
+      setStatus({ type: 'error', message: t(locale, 'invalidUrl') });
       return;
     }
 
@@ -128,7 +128,7 @@ function App() {
       <div className="header">
         <h1>
           <span>{t(locale, 'youtube')}</span>{' '}
-          {locale === 'ko' ? '자막 추출기' : 'Subtitle Extractor'}
+          {t(locale, 'appSubtitle')}
         </h1>
         <button className="btn-settings" onClick={() => setShowSettings(true)}>
           &#9881;

@@ -28,12 +28,20 @@ fn emit_log(app: &AppHandle, msg: &str) {
 fn lang_name(code: &str, locale: &str) -> String {
     match (code, locale) {
         ("ko", "ko") => "한국어".into(),
+        ("ko", "ja") => "韓国語".into(),
+        ("ko", "zh") => "韩语".into(),
         ("ko", _) => "Korean".into(),
         ("en", "ko") => "영어".into(),
+        ("en", "ja") => "英語".into(),
+        ("en", "zh") => "英语".into(),
         ("en", _) => "English".into(),
         ("ja", "ko") => "일본어".into(),
+        ("ja", "ja") => "日本語".into(),
+        ("ja", "zh") => "日语".into(),
         ("ja", _) => "Japanese".into(),
         ("zh", "ko") => "중국어".into(),
+        ("zh", "ja") => "中国語".into(),
+        ("zh", "zh") => "中文".into(),
         ("zh", _) => "Chinese".into(),
         (other, _) => other.to_string(),
     }
@@ -42,14 +50,24 @@ fn lang_name(code: &str, locale: &str) -> String {
 fn msg(locale: &str, key: &str) -> String {
     match (locale, key) {
         ("ko", "invalid_url") => "유효한 URL이 아닙니다.".into(),
+        ("ja", "invalid_url") => "有効なURLではありません。".into(),
+        ("zh", "invalid_url") => "无效的URL。".into(),
         (_, "invalid_url") => "Invalid URL.".into(),
         ("ko", "no_subtitle") => "이 영상에서 자막을 찾을 수 없습니다.".into(),
+        ("ja", "no_subtitle") => "この動画に字幕が見つかりません。".into(),
+        ("zh", "no_subtitle") => "未找到该视频的字幕。".into(),
         (_, "no_subtitle") => "No subtitles found for this video.".into(),
         ("ko", "download_failed") => "자막을 다운로드하지 못했습니다.".into(),
+        ("ja", "download_failed") => "字幕のダウンロードに失敗しました。".into(),
+        ("zh", "download_failed") => "字幕下载失败。".into(),
         (_, "download_failed") => "Failed to download subtitles.".into(),
         ("ko", "searching") => "자막 검색 중...".into(),
+        ("ja", "searching") => "字幕を検索中...".into(),
+        ("zh", "searching") => "正在搜索字幕...".into(),
         (_, "searching") => "Searching subtitles...".into(),
         ("ko", "found") => "자막 발견! 처리 중...".into(),
+        ("ja", "found") => "字幕発見！処理中...".into(),
+        ("zh", "found") => "找到字幕！处理中...".into(),
         (_, "found") => "Subtitle found! Processing...".into(),
         _ => key.into(),
     }
@@ -97,10 +115,11 @@ async fn extract_subtitle(
         .filter(|p| p.exists());
 
     if let Some(ref cf) = cookie_file {
-        let cookie_msg = if loc == "ko" {
-            format!("쿠키 사용: {}", cf.display())
-        } else {
-            format!("Using cookies: {}", cf.display())
+        let cookie_msg = match loc {
+            "ko" => format!("쿠키 사용: {}", cf.display()),
+            "ja" => format!("Cookie使用: {}", cf.display()),
+            "zh" => format!("使用Cookie: {}", cf.display()),
+            _ => format!("Using cookies: {}", cf.display()),
         };
         emit_log(&app, &cookie_msg);
     }
@@ -110,10 +129,11 @@ async fn extract_subtitle(
     };
 
     // Step 1: --list-subs로 실제 언어코드 확인 (yt-dlp 1회차)
-    let searching_msg = if loc == "ko" {
-        format!("{} 자막 검색 중...", lang_display.join(", "))
-    } else {
-        format!("Searching {} subtitles...", lang_display.join(", "))
+    let searching_msg = match loc {
+        "ko" => format!("{} 자막 검색 중...", lang_display.join(", ")),
+        "ja" => format!("{} 字幕検索中...", lang_display.join(", ")),
+        "zh" => format!("{} 字幕搜索中...", lang_display.join(", ")),
+        _ => format!("Searching {} subtitles...", lang_display.join(", ")),
     };
     emit_log(&app, &searching_msg);
 
@@ -175,10 +195,11 @@ async fn extract_subtitle(
 
     // Step 2: 실제 코드로 한 번에 다운로드 (yt-dlp 2회차)
     let dl_csv = download_codes.join(",");
-    let dl_msg = if loc == "ko" {
-        "자막 다운로드 중...".to_string()
-    } else {
-        "Downloading subtitles...".to_string()
+    let dl_msg = match loc {
+        "ko" => "자막 다운로드 중...".to_string(),
+        "ja" => "字幕ダウンロード中...".to_string(),
+        "zh" => "正在下载字幕...".to_string(),
+        _ => "Downloading subtitles...".to_string(),
     };
     emit_log(&app, &dl_msg);
 
@@ -239,10 +260,11 @@ async fn extract_subtitle(
 
     match best {
         Some((lang_code, path)) => {
-            let done_msg = if loc == "ko" {
-                format!("{} 자막 발견! 처리 중...", lang_name(lang_code, loc))
-            } else {
-                format!("{} subtitle found! Processing...", lang_name(lang_code, loc))
+            let done_msg = match loc {
+                "ko" => format!("{} 자막 발견! 처리 중...", lang_name(lang_code, loc)),
+                "ja" => format!("{} 字幕発見！処理中...", lang_name(lang_code, loc)),
+                "zh" => format!("{} 字幕已找到！处理中...", lang_name(lang_code, loc)),
+                _ => format!("{} subtitle found! Processing...", lang_name(lang_code, loc)),
             };
             emit_log(&app, &done_msg);
 
